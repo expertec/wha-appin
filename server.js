@@ -769,6 +769,18 @@ app.post('/api/web/after-form', async (req, res) => {
         .status(400)
         .json({ error: 'Falta summary' });
 
+    const normalizedType = String(
+      summary?.type ||
+        summary?.templateId ||
+        ''
+    ).toLowerCase();
+    const isInvitation =
+      normalizedType.includes('invitation');
+    const templateId = String(
+      summary?.templateId ||
+        (isInvitation ? 'invitation' : 'info')
+    ).toLowerCase();
+
     const e164 = toE164(
       leadPhone || (leadId || '').split('@')[0]
     );
@@ -812,6 +824,15 @@ app.post('/api/web/after-form', async (req, res) => {
 
     let uploadedLogoURL = null;
     let uploadedPhotos = [];
+    let heroImageURL = summary?.heroImageURL || summary?.heroImage || '';
+    const providedGallery = [
+      ...(Array.isArray(summary?.photoURLs)
+        ? summary.photoURLs.filter(Boolean)
+        : []),
+      ...(Array.isArray(summary?.gallery)
+        ? summary.gallery.filter(Boolean)
+        : []),
+    ];
     try {
       const assets = summary?.assets || {};
       const { logo, images = [] } = assets;
@@ -853,16 +874,26 @@ app.post('/api/web/after-form', async (req, res) => {
       );
     }
 
-    if (!uploadedPhotos || uploadedPhotos.length === 0) {
+    let galleryFinal = [...uploadedPhotos];
+    for (const url of providedGallery) {
+      if (url && !galleryFinal.includes(url)) {
+        galleryFinal.push(url);
+      }
+    }
+    if (!heroImageURL && galleryFinal.length) {
+      heroImageURL = galleryFinal[0];
+    }
+
+    if (!galleryFinal || galleryFinal.length === 0) {
       try {
-        uploadedPhotos =
+        galleryFinal =
           await getStockPhotoUrls(summary);
       } catch (e) {
         console.error(
           '[after-form] stock photos error:',
           e
         );
-        uploadedPhotos =
+        galleryFinal =
           buildUnsplashFeaturedQueries(summary);
       }
     }
@@ -890,6 +921,11 @@ app.post('/api/web/after-form', async (req, res) => {
         });
       }
 
+      const story =
+        summary.businessStory ||
+        summary.message ||
+        summary.description ||
+        '';
       const ref = await db
         .collection('Negocios')
         .add({
@@ -898,14 +934,28 @@ app.post('/api/web/after-form', async (req, res) => {
           status: 'Sin procesar',
           companyInfo:
             summary.companyName ||
+            summary.eventName ||
             summary.name ||
             '',
+          eventName:
+            summary.eventName ||
+            summary.companyName ||
+            '',
+          hosts: summary.hosts || '',
+          type: isInvitation
+            ? 'invitation'
+            : summary.type || 'website',
+          eventType:
+            summary.eventType || '',
+          eventDetails:
+            summary.eventDetails || null,
+          rsvp: summary.rsvp || null,
+          registryLink:
+            summary.registryLink || '',
           businessSector: '',
-          businessStory:
-            summary.description || '',
-          templateId: String(
-            summary.templateId || 'info'
-          ).toLowerCase(),
+          businessStory: story,
+          message: summary.message || '',
+          templateId,
           primaryColor:
             summary.primaryColor || null,
           palette:
@@ -926,11 +976,12 @@ app.post('/api/web/after-form', async (req, res) => {
             uploadedLogoURL ||
             summary.logoURL ||
             '',
-          photoURLs:
-            uploadedPhotos &&
-            uploadedPhotos.length
-              ? uploadedPhotos
-              : summary.photoURLs || [],
+          heroImageURL:
+            heroImageURL ||
+            summary.heroImageURL ||
+            '',
+          photoURLs: galleryFinal,
+          gallery: galleryFinal,
           slug: summary.slug || '',
           createdAt: new Date(),
         });
@@ -945,32 +996,47 @@ app.post('/api/web/after-form', async (req, res) => {
         summary?.contactName ||
         ''
     );
-    const giroBase = (() => {
-      const t = String(
-        summary?.templateId || ''
-      ).toLowerCase();
-      if (t === 'ecommerce') return 'tienda online';
-      if (t === 'booking')
-        return 'servicio con reservas';
-      return 'negocio';
-    })();
+    let msg1 = '';
+    let msg2 = '';
+    if (isInvitation) {
+      const eventLabel =
+        summary?.eventName ||
+        summary?.companyName ||
+        'tu evento';
+      msg1 = `${
+        nombreCorto ? nombreCorto + ', ' : ''
+      }ya recibí los datos de ${eventLabel}. Estoy generando tu invitación digital para que la compartas hoy mismo.`;
+      msg2 =
+        'En cuanto esté lista te enviaré el enlace editable y una versión lista para compartir por WhatsApp con tus invitados.';
+    } else {
+      const giroBase = (() => {
+        const t = String(
+          summary?.templateId || ''
+        ).toLowerCase();
+        if (t === 'ecommerce')
+          return 'tienda online';
+        if (t === 'booking')
+          return 'servicio con reservas';
+        return 'negocio';
+      })();
 
-    const giroHumano = humanizeGiro
-      ? humanizeGiro(giroBase)
-      : giroBase;
-    const [op1, op2, op3] =
-      pickOpportunityTriplet
-        ? pickOpportunityTriplet(giroHumano)
-        : [
-            'clarificar propuesta de valor',
-            'CTA visible a WhatsApp',
-            'pruebas sociales (reseñas)',
-          ];
+      const giroHumano = humanizeGiro
+        ? humanizeGiro(giroBase)
+        : giroBase;
+      const [op1, op2, op3] =
+        pickOpportunityTriplet
+          ? pickOpportunityTriplet(giroHumano)
+          : [
+              'clarificar propuesta de valor',
+              'CTA visible a WhatsApp',
+              'pruebas sociales (reseñas)',
+            ];
 
-    const msg1 = `${
-      nombreCorto ? nombreCorto + ', ' : ''
-    }ya recibí tu formulario. Mi equipo y yo ya estamos trabajando en tu muestra para que quede clara y útil.`;
-    const msg2 = `Platicando con mi equipo, identificamos tres áreas para que tu ${giroHumano} aproveche mejor su web:\n1) ${op1}\n2) ${op2}\n3) ${op3}\nSi te late, las integramos en tu demo y te la comparto.`;
+      msg1 = `${
+        nombreCorto ? nombreCorto + ', ' : ''
+      }ya recibí tu formulario. Mi equipo y yo ya estamos trabajando en tu muestra para que quede clara y útil.`;
+      msg2 = `Platicando con mi equipo, identificamos tres áreas para que tu ${giroHumano} aproveche mejor su web:\n1) ${op1}\n2) ${op2}\n3) ${op3}\nSi te late, las integramos en tu demo y te la comparto.`;
+    }
 
     const d1 =
       60_000 + Math.floor(Math.random() * 30_000);
