@@ -65,6 +65,84 @@ const OpenAICtor = OpenAIImport?.OpenAI || OpenAIImport;
 
 import { classifyBusiness } from './utils/businessClassifier.js';
 
+function normalizeWhatsAppLink(phone) {
+  if (!phone) return '';
+  const digits = String(phone).replace(/\D/g, '');
+  if (!digits) return '';
+  return `https://wa.me/${digits}`;
+}
+
+function buildPaletteFromSummary(summary = {}, plantillaConfig = null) {
+  if (Array.isArray(summary?.palette) && summary.palette.length) {
+    return summary.palette;
+  }
+  const tplColors = [
+    plantillaConfig?.primaryColor,
+    plantillaConfig?.accentColor,
+    plantillaConfig?.backgroundColor,
+    plantillaConfig?.textColor,
+  ].filter(Boolean);
+  if (tplColors.length) return tplColors;
+  return summary?.primaryColor ? [summary.primaryColor] : [];
+}
+
+function buildInvitationSchema(summary = {}, plantillaConfig = null, heroImageUrl = '', gallery = []) {
+  const eventName =
+    summary.eventName || summary.companyName || summary.name || 'Tu evento';
+  const primaryColor = plantillaConfig?.primaryColor || summary.primaryColor || '#6b21a8';
+  const accentColor = plantillaConfig?.accentColor || '#f5f3ff';
+  const textColor = plantillaConfig?.textColor || '#111827';
+
+  const normalizedGallery = Array.isArray(gallery)
+    ? gallery.map((url, idx) => ({ url, caption: summary?.gallery?.[idx]?.caption || '' }))
+    : [];
+
+  return {
+    templateId: 'invitation',
+    type: 'invitation',
+    eventName,
+    hosts: summary.hosts || '',
+    hero: {
+      title: eventName,
+      subtitle: summary.message || summary.businessStory || '',
+      backgroundImageUrl: heroImageUrl || summary.heroImageURL || '',
+      eyebrow: 'Invitación especial',
+      cta: summary?.rsvp?.phone ? 'Confirmar asistencia' : '',
+      ctaUrl: summary?.rsvp?.phone ? normalizeWhatsAppLink(summary.rsvp.phone) : '',
+    },
+    colors: {
+      primary: primaryColor,
+      secondary: plantillaConfig?.secondaryColor || accentColor,
+      accent: accentColor,
+      text: textColor,
+    },
+    about: {
+      title: 'Nuestra historia',
+      text: summary.message || summary.businessStory || '',
+      mission: summary.hosts || '',
+    },
+    eventDetails: summary.eventDetails || {},
+    rsvp: summary.rsvp || {},
+    registryLink: summary.registryLink || '',
+    timeline: summary.timeline || [],
+    gallery: { images: normalizedGallery },
+    template: plantillaConfig
+      ? {
+          id: plantillaConfig.id,
+          name: plantillaConfig.name || '',
+          coverImageUrl: plantillaConfig.coverImageUrl || '',
+          previewUrl: plantillaConfig.previewUrl || '',
+          primaryFont: plantillaConfig.primaryFont || '',
+          secondaryFont: plantillaConfig.secondaryFont || '',
+          primaryColor: plantillaConfig.primaryColor || '',
+          accentColor: plantillaConfig.accentColor || '',
+          backgroundColor: plantillaConfig.backgroundColor || '',
+          textColor: plantillaConfig.textColor || '',
+        }
+      : null,
+  };
+}
+
 function buildUnsplashFeaturedQueries(summary = {}) {
   const objetivoMap = {
     ecommerce: 'tienda online,productos',
@@ -961,6 +1039,7 @@ app.post('/api/web/after-form', async (req, res) => {
           businessStory: story,
           message: summary.message || '',
           templateId,
+          plantillaId: summary.plantillaId || '',
           primaryColor:
             summary.primaryColor || null,
           palette:
