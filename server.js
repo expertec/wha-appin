@@ -853,11 +853,9 @@ app.post('/api/web/after-form', async (req, res) => {
         ''
     ).toLowerCase();
     const isInvitation =
-      normalizedType.includes('invitation');
-    const templateId = String(
-      summary?.templateId ||
-        (isInvitation ? 'invitation' : 'info')
-    ).toLowerCase();
+      normalizedType.includes('invitation') ||
+      true;
+    const templateId = 'invitation';
 
     const e164 = toE164(
       leadPhone || (leadId || '').split('@')[0]
@@ -981,6 +979,43 @@ app.post('/api/web/after-form', async (req, res) => {
       }
     }
 
+    let plantillaConfig = null;
+    if (summary?.plantillaId) {
+      try {
+        const plantillaSnap = await db
+          .collection('Plantillas')
+          .doc(summary.plantillaId)
+          .get();
+        if (plantillaSnap.exists) {
+          plantillaConfig = {
+            id: plantillaSnap.id,
+            ...(plantillaSnap.data() || {}),
+          };
+        }
+      } catch (err) {
+        console.error(
+          '[after-form] Error obteniendo plantilla:',
+          err?.message || err
+        );
+      }
+    }
+
+    const palette = buildPaletteFromSummary(
+      summary,
+      plantillaConfig
+    );
+    const invitationSchema = buildInvitationSchema(
+      summary,
+      plantillaConfig,
+      heroImageURL,
+      galleryFinal
+    );
+    const eventDisplayName =
+      invitationSchema.eventName ||
+      summary.companyName ||
+      summary.eventName ||
+      '';
+
     let negocioDocId = negocioId;
     let finalSlug = summary.slug || '';
     if (!negocioDocId) {
@@ -1004,73 +1039,112 @@ app.post('/api/web/after-form', async (req, res) => {
         });
       }
 
-      const story =
-        summary.businessStory ||
-        summary.message ||
-        summary.description ||
-        '';
+      const payload = {
+        leadId: finalLeadId,
+        leadPhone: leadPhoneDigits,
+        status: 'Sin procesar',
+        companyInfo: eventDisplayName,
+        eventName: eventDisplayName,
+        hosts: summary.hosts || '',
+        type: 'invitation',
+        eventType: summary.eventType || '',
+        eventDetails: summary.eventDetails || null,
+        rsvp: summary.rsvp || null,
+        registryLink: summary.registryLink || '',
+        businessSector: '',
+        businessStory:
+          summary.businessStory || summary.message || '',
+        message: summary.message || '',
+        templateId,
+        plantillaId: summary.plantillaId || '',
+        primaryColor:
+          plantillaConfig?.primaryColor ||
+          summary.primaryColor ||
+          null,
+        palette,
+        keyItems: summary.keyItems || [],
+        contactWhatsapp:
+          summary.contactWhatsapp ||
+          summary.rsvp?.phone ||
+          '',
+        contactEmail:
+          summary.contactEmail ||
+          summary.rsvp?.email ||
+          '',
+        socialFacebook:
+          summary.socialFacebook || '',
+        socialInstagram:
+          summary.socialInstagram || '',
+        logoURL:
+          uploadedLogoURL ||
+          summary.logoURL ||
+          '',
+        heroImageURL:
+          heroImageURL ||
+          summary.heroImageURL ||
+          '',
+        photoURLs: galleryFinal,
+        gallery: galleryFinal,
+        slug: summary.slug || '',
+        schema: invitationSchema,
+        createdAt: new Date(),
+      };
+
       const ref = await db
         .collection('Negocios')
-        .add({
-          leadId: finalLeadId,
-          leadPhone: leadPhoneDigits,
-          status: 'Sin procesar',
-          companyInfo:
-            summary.companyName ||
-            summary.eventName ||
-            summary.name ||
-            '',
-          eventName:
-            summary.eventName ||
-            summary.companyName ||
-            '',
-          hosts: summary.hosts || '',
-          type: isInvitation
-            ? 'invitation'
-            : summary.type || 'website',
-          eventType:
-            summary.eventType || '',
-          eventDetails:
-            summary.eventDetails || null,
-          rsvp: summary.rsvp || null,
-          registryLink:
-            summary.registryLink || '',
-          businessSector: '',
-          businessStory: story,
-          message: summary.message || '',
-          templateId,
-          plantillaId: summary.plantillaId || '',
-          primaryColor:
-            summary.primaryColor || null,
-          palette:
-            summary.palette ||
-            (summary.primaryColor
-              ? [summary.primaryColor]
-              : []),
-          keyItems: summary.keyItems || [],
-          contactWhatsapp:
-            summary.contactWhatsapp || '',
-          contactEmail:
-            summary.contactEmail || '',
-          socialFacebook:
-            summary.socialFacebook || '',
-          socialInstagram:
-            summary.socialInstagram || '',
-          logoURL:
-            uploadedLogoURL ||
-            summary.logoURL ||
-            '',
-          heroImageURL:
-            heroImageURL ||
-            summary.heroImageURL ||
-            '',
-          photoURLs: galleryFinal,
-          gallery: galleryFinal,
-          slug: summary.slug || '',
-          createdAt: new Date(),
-        });
+        .add(payload);
       negocioDocId = ref.id;
       finalSlug = summary.slug || '';
+    } else {
+      await db
+        .collection('Negocios')
+        .doc(negocioDocId)
+        .set(
+          {
+            companyInfo: eventDisplayName,
+            eventName: eventDisplayName,
+            hosts: summary.hosts || '',
+            type: 'invitation',
+            eventType: summary.eventType || '',
+            eventDetails: summary.eventDetails || null,
+            rsvp: summary.rsvp || null,
+            registryLink: summary.registryLink || '',
+            businessStory:
+              summary.businessStory ||
+              summary.message ||
+              '',
+            message: summary.message || '',
+            templateId,
+            plantillaId: summary.plantillaId || '',
+            primaryColor:
+              plantillaConfig?.primaryColor ||
+              summary.primaryColor ||
+              null,
+            palette,
+            contactWhatsapp:
+              summary.contactWhatsapp ||
+              summary.rsvp?.phone ||
+              '',
+            contactEmail:
+              summary.contactEmail ||
+              summary.rsvp?.email ||
+              '',
+            logoURL:
+              uploadedLogoURL ||
+              summary.logoURL ||
+              '',
+            heroImageURL:
+              heroImageURL ||
+              summary.heroImageURL ||
+              '',
+            photoURLs: galleryFinal,
+            gallery: galleryFinal,
+            slug: summary.slug || '',
+            schema: invitationSchema,
+            updatedAt: new Date(),
+          },
+          { merge: true }
+        );
     }
 
     const first = (v = '') =>

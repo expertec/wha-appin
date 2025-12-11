@@ -1,6 +1,7 @@
 // schemaGenerator.js - Generador de schemas profesionales con IA
 
 import OpenAIImport from 'openai';
+import dayjs from 'dayjs';
 const OpenAICtor = OpenAIImport?.OpenAI || OpenAIImport;
 
 // ============ Configuración de OpenAI ============
@@ -487,6 +488,114 @@ function buildBaseSchema(data, aiContent, templateId = 'info') {
   };
 }
 
+function buildInvitationTimeline(eventType = 'general', eventTime = '') {
+  const base = dayjs(`1970-01-01 ${eventTime || '17:00'}`);
+  const formatSlot = (minutesFromStart, fallback) =>
+    base.isValid() ? base.add(minutesFromStart, 'minute').format('hh:mm A') : fallback;
+
+  const templates = {
+    wedding: [
+      { label: 'Recepción', minutes: 0, detail: 'Recepción y coctel de bienvenida.' },
+      { label: 'Ceremonia', minutes: 60, detail: 'Ceremonia principal e intercambio de votos.' },
+      { label: 'Brindis y fotos', minutes: 120, detail: 'Brindis con familia y sesión fotográfica.' },
+      { label: 'Banquete', minutes: 180, detail: 'Cena y palabras especiales.' },
+      { label: 'Fiesta', minutes: 240, detail: 'Primer baile y apertura de pista.' },
+    ],
+    'baby-shower': [
+      { label: 'Bienvenida', minutes: 0, detail: 'Llegada de invitados y fotos.' },
+      { label: 'Dinámicas', minutes: 45, detail: 'Juegos y actividades.' },
+      { label: 'Mesa de regalos', minutes: 90, detail: 'Apertura de regalos.' },
+      { label: 'Brunch', minutes: 120, detail: 'Brunch y despedida.' },
+    ],
+    birthday: [
+      { label: 'Recepción', minutes: 0, detail: 'Coctel de bienvenida.' },
+      { label: 'Momento sorpresa', minutes: 60, detail: 'Pastel y velitas.' },
+      { label: 'Fiesta', minutes: 120, detail: 'Música y convivencia.' },
+    ],
+    corporate: [
+      { label: 'Registro', minutes: 0, detail: 'Registro y networking.' },
+      { label: 'Presentaciones', minutes: 45, detail: 'Conferencias principales.' },
+      { label: 'Coffee break', minutes: 105, detail: 'Receso y networking.' },
+      { label: 'Cierre', minutes: 150, detail: 'Conclusiones y agradecimientos.' },
+    ],
+  };
+
+  const defaultTemplate = [
+    { label: 'Recepción', minutes: 0, detail: 'Bienvenida y acomodo de invitados.' },
+    { label: 'Ceremonia', minutes: 60, detail: 'Momento principal del evento.' },
+    { label: 'Celebración', minutes: 120, detail: 'Brindis y convivencia.' },
+  ];
+
+  const selected = templates[eventType] || defaultTemplate;
+  return selected.map((item) => ({
+    label: item.label,
+    time: formatSlot(item.minutes, item.label),
+    detail: item.detail,
+  }));
+}
+
+function buildInvitationSchema(data) {
+  console.log('[buildInvitationSchema] Generando contenido para invitación...');
+  const base = buildBaseSchema(data, generateFallbackContent(data), 'invitation');
+  const galleryImages = Array.isArray(data.photoURLs) && data.photoURLs.length
+    ? data.photoURLs
+    : base.gallery.images;
+
+  const eventDetails = {
+    date: data.eventDetails?.date || data.eventDate || null,
+    time: data.eventDetails?.time || data.eventTime || null,
+    venueName: data.eventDetails?.venueName || data.venueName || '',
+    venueAddress: data.eventDetails?.venueAddress || data.venueAddress || '',
+    city: data.eventDetails?.city || data.city || '',
+    dressCode: data.eventDetails?.dressCode || data.dressCode || '',
+  };
+
+  const rsvp = {
+    phone: data.rsvp?.phone || data.contactWhatsapp || data.leadPhone || '',
+    email: data.rsvp?.email || data.contactEmail || '',
+    deadline: data.rsvp?.deadline || data.rsvpDeadline || null,
+  };
+
+  const eventType = (data.eventType || 'general').toLowerCase();
+  const message =
+    data.message ||
+    data.businessStory ||
+    'Estamos muy emocionados de compartir este momento contigo. Tu presencia hará este día aún más especial.';
+
+  const notes = Array.isArray(data.notes) && data.notes.length
+    ? data.notes
+    : [
+        eventDetails.dressCode ? `Código de vestimenta: ${eventDetails.dressCode}.` : null,
+        data.registryLink ? 'Consulta nuestra mesa de regalos para saber cómo apoyarnos.' : null,
+        rsvp.deadline
+          ? `Por favor confirma antes del ${dayjs(rsvp.deadline).isValid()
+              ? dayjs(rsvp.deadline).format('D [de] MMMM YYYY')
+              : rsvp.deadline}.`
+          : null,
+        'Evita llevar arreglos florales grandes dentro del salón.',
+      ].filter(Boolean);
+
+  const timeline = buildInvitationTimeline(eventType, eventDetails.time);
+
+  return {
+    templateId: 'invitation',
+    colors: base.colors,
+    contact: base.contact,
+    hero: base.hero,
+    gallery: { images: galleryImages },
+    eventName: data.eventName || data.companyInfo || base.brand?.name || 'Nuestra celebración',
+    hosts: data.hosts || '',
+    heroImageURL: data.heroImageURL || galleryImages[0],
+    message,
+    eventType,
+    eventDetails,
+    rsvp,
+    registryLink: data.registryLink || '',
+    timeline: { items: timeline },
+    notes,
+  };
+}
+
 /**
  * Schema para sitios informativos (presencia web)
  */
@@ -622,6 +731,8 @@ export async function generateCompleteSchema(data) {
         return await buildEcommerceSchema(data);
       case 'booking':
         return await buildBookingSchema(data);
+      case 'invitation':
+        return await buildInvitationSchema(data);
       case 'info':
       default:
         return await buildInfoSchema(data);
