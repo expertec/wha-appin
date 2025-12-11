@@ -810,9 +810,14 @@ app.post('/api/web/after-form', async (req, res) => {
     }
     const leadData = (await leadRef.get()).data() || {};
 
+    const summaryForStorage = { ...(summary || {}) };
+    if (Object.prototype.hasOwnProperty.call(summaryForStorage, 'assets')) {
+      delete summaryForStorage.assets;
+    }
+
     await leadRef.set(
       {
-        briefWeb: summary || {},
+        briefWeb: summaryForStorage,
         etiquetas:
           admin.firestore.FieldValue.arrayUnion(
             'FormularioCompletado'
