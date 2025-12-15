@@ -2,7 +2,10 @@
 
 import OpenAIImport from 'openai';
 import dayjs from 'dayjs';
+import 'dayjs/locale/es';
 const OpenAICtor = OpenAIImport?.OpenAI || OpenAIImport;
+
+dayjs.locale('es');
 
 // ============ Configuración de OpenAI ============
 async function getOpenAI() {
@@ -534,7 +537,89 @@ function buildInvitationTimeline(eventType = 'general', eventTime = '') {
   }));
 }
 
-function buildInvitationSchema(data) {
+function formatInvitationDate(dateStr) {
+  if (!dateStr) return '';
+  const parsed = dayjs(dateStr);
+  if (!parsed.isValid()) return '';
+  return parsed.format('D [de] MMMM YYYY');
+}
+
+function formatInvitationTime(timeStr) {
+  if (!timeStr) return '';
+  const parsed = dayjs(`1970-01-01 ${timeStr}`);
+  if (!parsed.isValid()) return '';
+  return parsed.format('HH:mm');
+}
+
+async function generateInvitationAiContent(data = {}) {
+  const baseLetter =
+    data.message ||
+    data.businessStory ||
+    'Estamos muy emocionados de compartir este día contigo.';
+  const baseSignature =
+    data.hosts ||
+    data.eventName ||
+    data.companyInfo ||
+    'Familia anfitriona';
+  const baseCountdown = {
+    eyebrow: 'Falta muy poco',
+    heading: 'Nuestra cuenta regresiva',
+  };
+  const fallback = {
+    letter: baseLetter,
+    signature: baseSignature,
+    countdown: baseCountdown,
+  };
+
+  if (!process.env.OPENAI_API_KEY) return fallback;
+
+  try {
+    const details = data.eventDetails || {};
+    const payload = {
+      tipo: data.eventType || 'celebración',
+      homenajeado: data.eventName || data.companyInfo || 'nuestro evento',
+      anfitriones: data.hosts || '',
+      historia: data.message || data.businessStory || '',
+      fecha: formatInvitationDate(details.date),
+      hora: formatInvitationTime(details.time),
+      lugar: [details.venueName, details.city].filter(Boolean).join(', '),
+    };
+
+    const prompt = `Genera copy para una invitación en JSON usando estos datos:\n${JSON.stringify(
+      payload,
+      null,
+      2
+    )}\nFormato requerido:\n{\n  "letter": "Carta breve (máx. 80 palabras)",\n  "signature": "Firma corta",\n  "countdown": {\n    "eyebrow": "frase breve",\n    "heading": "título elegante"\n  }\n}\nDevuelve solo JSON válido.`;
+
+    const raw = await chatCompletion({
+      model: 'gpt-4o-mini',
+      messages: [
+        {
+          role: 'system',
+          content: 'Eres un copywriter profesional. Respondes solo con JSON y en español neutro.',
+        },
+        { role: 'user', content: prompt },
+      ],
+      max_tokens: 400,
+      temperature: 0.6,
+    });
+    const cleaned = String(raw || '').trim().replace(/```json/gi, '').replace(/```/g, '');
+    const parsed = JSON.parse(cleaned);
+    return {
+      letter: parsed?.letter?.trim() || baseLetter,
+      signature: parsed?.signature?.trim() || baseSignature,
+      countdown: {
+        eyebrow: parsed?.countdown?.eyebrow?.trim() || baseCountdown.eyebrow,
+        heading: parsed?.countdown?.heading?.trim() || baseCountdown.heading,
+      },
+    };
+  } catch (err) {
+    console.error('[generateInvitationAiContent] error:', err?.message || err);
+    return fallback;
+  }
+}
+
+async function buildInvitationSchema(data) {
   console.log('[buildInvitationSchema] Generando contenido para invitación...');
   const base = buildBaseSchema(data, generateFallbackContent(data), 'invitation');
   const galleryImages = Array.isArray(data.photoURLs) && data.photoURLs.length
@@ -577,6 +662,11 @@ function buildInvitationSchema(data) {
 
   const timeline = buildInvitationTimeline(eventType, eventDetails.time);
 
+  const aiContent = await generateInvitationAiContent({
+    ...data,
+    eventDetails,
+  });
+
   return {
     templateId: 'invitation',
     colors: base.colors,
@@ -593,6 +683,7 @@ function buildInvitationSchema(data) {
     registryLink: data.registryLink || '',
     timeline: { items: timeline },
     notes,
+    ai: aiContent,
   };
 }
 

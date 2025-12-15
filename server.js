@@ -10,11 +10,14 @@ import fs from 'fs';
 import ffmpeg from 'fluent-ffmpeg';
 import ffmpegInstaller from '@ffmpeg-installer/ffmpeg';
 import dayjs from 'dayjs';
+import 'dayjs/locale/es';
 import slugify from 'slugify';
 import axios from 'axios';
 import { Timestamp } from 'firebase-admin/firestore';
 
 dotenv.config();
+
+dayjs.locale('es');
 
 // ================ FFmpeg ================
 ffmpeg.setFfmpegPath(ffmpegInstaller.path);
@@ -63,6 +66,34 @@ try {
 import OpenAIImport from 'openai';
 const OpenAICtor = OpenAIImport?.OpenAI || OpenAIImport;
 
+async function getOpenAI() {
+  if (!process.env.OPENAI_API_KEY) throw new Error('Falta OPENAI_API_KEY');
+
+  try {
+    const client = new OpenAICtor({ apiKey: process.env.OPENAI_API_KEY });
+    if (client?.chat?.completions?.create) return { client, mode: 'v4-chat' };
+    if (client?.responses?.create) return { client, mode: 'v4-resp' };
+  } catch (err) {
+    console.error('[getOpenAI] fallback al cliente v3:', err?.message || err);
+  }
+
+  const { Configuration, OpenAIApi } = await import('openai');
+  const configuration = new Configuration({ apiKey: process.env.OPENAI_API_KEY });
+  const client = new OpenAIApi(configuration);
+  return { client, mode: 'v3' };
+}
+
+function extractText(resp, mode) {
+  try {
+    if (mode === 'v3') {
+      return resp?.data?.choices?.[0]?.message?.content?.trim() || '';
+    }
+    return resp?.choices?.[0]?.message?.content?.trim() || '';
+  } catch {
+    return '';
+  }
+}
+
 import { classifyBusiness } from './utils/businessClassifier.js';
 
 function normalizeWhatsAppLink(phone) {
@@ -86,7 +117,95 @@ function buildPaletteFromSummary(summary = {}, plantillaConfig = null) {
   return summary?.primaryColor ? [summary.primaryColor] : [];
 }
 
-function buildInvitationSchema(summary = {}, plantillaConfig = null, heroImageUrl = '', gallery = []) {
+function formatEventDateLabel(dateStr) {
+  if (!dateStr) return '';
+  const parsed = dayjs(dateStr);
+  if (!parsed.isValid()) return '';
+  return parsed.format('D [de] MMMM YYYY');
+}
+
+function formatEventTimeLabel(timeStr) {
+  if (!timeStr) return '';
+  const parsed = dayjs(`1970-01-01 ${timeStr}`);
+  if (!parsed.isValid()) return '';
+  return parsed.format('HH:mm');
+}
+
+async function generateInvitationAIContent(summary = {}) {
+  const baseLetter =
+    summary.message ||
+    summary.businessStory ||
+    'Estamos muy emocionados de compartir este momento contigo.';
+  const baseSignature =
+    summary.hosts ||
+    summary.eventName ||
+    summary.companyInfo ||
+    'Familia anfitriona';
+  const baseCountdown = {
+    eyebrow: 'Falta muy poco',
+    heading: 'Nuestra cuenta regresiva',
+  };
+  const fallback = {
+    letter: baseLetter,
+    signature: baseSignature,
+    countdown: baseCountdown,
+  };
+
+  if (!process.env.OPENAI_API_KEY) return fallback;
+
+  try {
+    const eventDetails = summary.eventDetails || {};
+    const formattedDate = formatEventDateLabel(eventDetails.date);
+    const formattedTime = formatEventTimeLabel(eventDetails.time);
+    const location = [eventDetails.venueName, eventDetails.city]
+      .filter(Boolean)
+      .join(', ');
+    const payload = {
+      tipo: summary.eventType || 'celebración',
+      homenajeado: summary.eventName || summary.companyInfo || 'nuestro evento',
+      anfitriones: summary.hosts || '',
+      historia: summary.message || summary.businessStory || '',
+      fecha: formattedDate,
+      hora: formattedTime,
+      lugar: location,
+    };
+
+    const userContent = `Genera un texto inspirador para una invitación usando estos datos:\n${JSON.stringify(
+      payload,
+      null,
+      2
+    )}\n\nResponde SOLO con JSON válido siguiendo este formato:\n{\n  "letter": "Carta emotiva (máx. 80 palabras)",\n  "signature": "Firma corta (Familia ...)",\n  "countdown": {\n    "eyebrow": "frase breve en mayúsculas o título corto",\n    "heading": "título elegante (máx. 5 palabras)"\n  }\n}`;
+
+    const raw = await chatCompletionCompat({
+      model: 'gpt-4o-mini',
+      messages: [
+        {
+          role: 'system',
+          content: 'Eres un copywriter de invitaciones. Entregas solo JSON válido y escribes en español neutro.',
+        },
+        { role: 'user', content: userContent },
+      ],
+      max_tokens: 400,
+      temperature: 0.6,
+    });
+
+    const cleaned = String(raw || '').trim().replace(/```json/gi, '').replace(/```/g, '');
+    const parsed = JSON.parse(cleaned);
+    return {
+      letter: parsed?.letter?.trim() || baseLetter,
+      signature: parsed?.signature?.trim() || baseSignature,
+      countdown: {
+        eyebrow: parsed?.countdown?.eyebrow?.trim() || baseCountdown.eyebrow,
+        heading: parsed?.countdown?.heading?.trim() || baseCountdown.heading,
+      },
+    };
+  } catch (err) {
+    console.error('[generateInvitationAIContent] error:', err?.message || err);
+    return fallback;
+  }
+}
+
+async function buildInvitationSchema(summary = {}, plantillaConfig = null, heroImageUrl = '', gallery = []) {
   const eventName =
     summary.eventName || summary.companyName || summary.name || 'Tu evento';
   const primaryColor = plantillaConfig?.primaryColor || summary.primaryColor || '#6b21a8';
@@ -96,6 +215,16 @@ function buildInvitationSchema(summary = {}, plantillaConfig = null, heroImageUr
   const normalizedGallery = Array.isArray(gallery)
     ? gallery.map((url, idx) => ({ url, caption: summary?.gallery?.[idx]?.caption || '' }))
     : [];
+
+  const aiContent = await generateInvitationAIContent({
+    eventType: summary.eventType,
+    eventName,
+    hosts: summary.hosts,
+    message: summary.message,
+    businessStory: summary.businessStory,
+    eventDetails: summary.eventDetails,
+    companyInfo: summary.companyInfo,
+  });
 
   return {
     templateId: 'invitation',
@@ -121,6 +250,7 @@ function buildInvitationSchema(summary = {}, plantillaConfig = null, heroImageUr
       text: summary.message || summary.businessStory || '',
       mission: summary.hosts || '',
     },
+    ai: aiContent,
     eventDetails: summary.eventDetails || {},
     rsvp: summary.rsvp || {},
     registryLink: summary.registryLink || '',
@@ -1004,7 +1134,7 @@ app.post('/api/web/after-form', async (req, res) => {
       summary,
       plantillaConfig
     );
-    const invitationSchema = buildInvitationSchema(
+    const invitationSchema = await buildInvitationSchema(
       summary,
       plantillaConfig,
       heroImageURL,
