@@ -2,7 +2,7 @@
 
 import OpenAIImport from 'openai';
 import dayjs from 'dayjs';
-import 'dayjs/locale/es';
+import 'dayjs/locale/es.js';
 const OpenAICtor = OpenAIImport?.OpenAI || OpenAIImport;
 
 dayjs.locale('es');

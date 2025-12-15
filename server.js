@@ -10,7 +10,7 @@ import fs from 'fs';
 import ffmpeg from 'fluent-ffmpeg';
 import ffmpegInstaller from '@ffmpeg-installer/ffmpeg';
 import dayjs from 'dayjs';
-import 'dayjs/locale/es';
+import 'dayjs/locale/es.js';
 import slugify from 'slugify';
 import axios from 'axios';
 import { Timestamp } from 'firebase-admin/firestore';
